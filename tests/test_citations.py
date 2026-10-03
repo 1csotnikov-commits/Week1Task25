@@ -68,6 +68,15 @@ class TestCitations(unittest.TestCase):
         sources = extract_sources(raw, chunks)
         self.assertFalse(sources[0].verified)
 
+    def test_citation_backfills_chunk_id(self):
+        chunks = [make_chunk("c0", "a.txt", "это фрагмент текста для цитаты")]
+        # Цитата без source/chunk_id — должна быть verified и получить backfill.
+        raw = 'ОТВЕТ:\nОтвет.\nЦИТАТЫ:\n- "фрагмент текста"\n'
+        citations = extract_citations(raw, chunks)
+        self.assertTrue(citations[0].verified)
+        self.assertEqual(citations[0].chunk_id, "c0")
+        self.assertEqual(citations[0].source, "a.txt")
+
 
 if __name__ == "__main__":
     unittest.main()

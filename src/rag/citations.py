@@ -87,11 +87,16 @@ def _parse_citation_line(line: str) -> Optional[Citation]:
     line = line.strip().lstrip("-*••\t ").strip()
     if not line:
         return None
-    m = re.search(r'"([^"]*)"', line)
-    text = m.group(1) if m else line
     source = _extract_field(line, "source")
     chunk_id = _extract_field(line, "chunk_id")
-    return Citation(text=text.strip(), source=source, section=None, chunk_id=chunk_id, verified=False)
+    first = line.find('"')
+    last = line.rfind('"')
+    if first != -1 and last > first:
+        text = line[first + 1 : last]
+    else:
+        text = re.sub(r"\|\s*(source|chunk_id)\s*=[^|]*", "", line)
+    text = text.strip().strip('"').strip()
+    return Citation(text=text, source=source, section=None, chunk_id=chunk_id, verified=False)
 
 
 def parse_structured_answer(raw_answer: str) -> ParsedAnswer:
@@ -110,14 +115,29 @@ def parse_structured_answer(raw_answer: str) -> ParsedAnswer:
     return ParsedAnswer(answer_text=answer_text, sources=sources, citations=citations, raw=raw, parse_failed=False)
 
 
+def _backfill(obj, chunk) -> None:
+    """Заполнить пустые source/section/chunk_id из найденного чанка."""
+    if not obj.source:
+        obj.source = chunk.source
+    if getattr(obj, "section", None) is None:
+        obj.section = chunk.section
+    if not obj.chunk_id:
+        obj.chunk_id = chunk.chunk_id
+
+
 def _verify_citation(cit: Citation, chunks: List[RetrievedChunk]) -> None:
-    chunk_ids = {c.chunk_id for c in chunks}
-    if cit.chunk_id and cit.chunk_id in chunk_ids:
+    by_id = {c.chunk_id: c for c in chunks}
+    if cit.chunk_id and cit.chunk_id in by_id:
         cit.verified = True
+        _backfill(cit, by_id[cit.chunk_id])
         return
     q = cit.text.strip().lower()
-    if q and any(q in c.text.lower() for c in chunks):
-        cit.verified = True
+    if q:
+        for c in chunks:
+            if q in c.text.lower():
+                cit.verified = True
+                _backfill(cit, c)
+                return
 
 
 def extract_citations(answer: str, chunks: List[RetrievedChunk]) -> List[Citation]:
@@ -131,13 +151,15 @@ def extract_citations(answer: str, chunks: List[RetrievedChunk]) -> List[Citatio
 def extract_sources(answer: str, chunks: List[RetrievedChunk]) -> List[SourceRef]:
     """Извлечь источники и пометить verified/unverified."""
     parsed = parse_structured_answer(answer)
-    chunk_ids = {c.chunk_id for c in chunks}
-    source_names = {c.source for c in chunks}
+    by_id = {c.chunk_id: c for c in chunks}
+    by_source = {c.source: c for c in chunks}
     for src in parsed.sources:
-        if src.chunk_id and src.chunk_id in chunk_ids:
+        if src.chunk_id and src.chunk_id in by_id:
             src.verified = True
-        elif src.source and src.source in source_names:
+            _backfill(src, by_id[src.chunk_id])
+        elif src.source and src.source in by_source:
             src.verified = True
+            _backfill(src, by_source[src.source])
     return parsed.sources
 
 
