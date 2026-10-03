@@ -75,6 +75,9 @@ def build_payload(
     top_k_retrieve: Optional[int] = None,
     top_k_after_rerank: Optional[int] = None,
     modes=None,
+    check_citations: Optional[bool] = None,
+    check_sources: Optional[bool] = None,
+    check_quote_match: Optional[bool] = None,
 ) -> dict:
     modes_list = list(modes) if modes else (list(results[0].modes.keys()) if results else [])
     rows = []
@@ -91,6 +94,9 @@ def build_payload(
         "index_name": index_name,
         "top_k_retrieve": top_k_retrieve,
         "top_k_after_rerank": top_k_after_rerank,
+        "check_citations": check_citations,
+        "check_sources": check_sources,
+        "check_quote_match": check_quote_match,
         "modes": modes_list,
         "aggregate": aggregate_modes(rows),
         "questions": rows,
@@ -104,9 +110,12 @@ def save_results(
     top_k_retrieve: Optional[int] = None,
     top_k_after_rerank: Optional[int] = None,
     modes=None,
+    check_citations: Optional[bool] = None,
+    check_sources: Optional[bool] = None,
+    check_quote_match: Optional[bool] = None,
 ):
     """Сохранить результаты в JSON и Markdown. Возвращает (json_path, md_path, payload)."""
-    payload = build_payload(results, index_name, top_k_retrieve, top_k_after_rerank, modes)
+    payload = build_payload(results, index_name, top_k_retrieve, top_k_after_rerank, modes, check_citations, check_sources, check_quote_match)
     d = Path(results_dir)
     d.mkdir(parents=True, exist_ok=True)
     ts = payload["timestamp"]

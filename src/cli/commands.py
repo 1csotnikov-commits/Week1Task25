@@ -180,7 +180,7 @@ COMMANDS: Dict[str, Dict[str, Any]] = {
             },
             "run": {
                 "description": "Прогнать вопросы в нескольких режимах и сохранить результаты",
-                "usage": "/eval run <index_name> [--questions <path>] [--mode <mode>] [--compare-all] [--top-k-retrieve N] [--top-k-after-rerank N]",
+                "usage": "/eval run <index_name> [--questions <path>] [--mode <mode>] [--compare-all] [--top-k-retrieve N] [--top-k-after-rerank N] [--check-citations on|off] [--check-sources on|off] [--check-quote-match on|off]",
                 "example": "/eval run my_index --top-k-retrieve 10 --top-k-after-rerank 5",
                 "arguments": [{"name": "index_name", "required": True, "description": "имя индекса"}],
                 "flags": [
@@ -189,6 +189,9 @@ COMMANDS: Dict[str, Dict[str, Any]] = {
                     {"name": "compare-all", "description": "прогнать все 5 режимов"},
                     {"name": "top-k-retrieve", "description": "сколько чанков достаём из FAISS"},
                     {"name": "top-k-after-rerank", "description": "сколько чанков оставляем после реранкера"},
+                    {"name": "check-citations", "description": "проверять наличие блока ЦИТАТЫ (on|off, по умолчанию on)"},
+                    {"name": "check-sources", "description": "проверять наличие блока ИСТОЧНИКИ (on|off, по умолчанию on)"},
+                    {"name": "check-quote-match", "description": "проверять, что цитаты подтверждены в чанках (on|off, по умолчанию on)"},
                 ],
             },
             "report": {

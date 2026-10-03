@@ -1,16 +1,15 @@
-# Week1Task23 — Реранкинг и фильтрация
+# Week1Task24 — Цитаты, источники, анти-галлюцинации
 
-Расширение проекта Week1Task21–22: локальный пайплайн индексации + RAG + reranking/query rewrite.
+Расширение проекта Week1Task21–23: локальный пайплайн индексации + RAG + reranking/rewrite + обязательные источники и цитаты.
 
-Папка проекта — `C:\II\Week 1 Task 21` (продолжение, публикация в отдельный репозиторий Week1Task23).
+Папка проекта — `C:\II\Week 1 Task 21` (продолжение, публикация в отдельный репозиторий Week1Task24).
 
 Возможности:
 
-1. Индексация документов (Task 21): загрузка, чанкинг (`fixed_size` / `structural`), эмбеддинги `nomic-ai/nomic-embed-text-v2-moe` (префиксы `search_document:` / `search_query:`), FAISS + SQLite, статистика;
-2. RAG-запрос (Task 22): вопрос → retrieval → промт → DeepSeek → ответ; два режима (с RAG / без RAG) + контрольные вопросы;
-3. Реранкинг/фильтрация (Task 23): порог similarity (threshold), эвристический пересчёт (similarity), опционально cross-encoder;
-4. Query rewrite (Task 23): none (по умолчанию), heuristic, llm (DeepSeek);
-5. Настраиваемые `top_k_retrieve` и `top_k_after_rerank`, сравнение режимов в `/eval`.
+1. Индексация документов (Task 21): чанкинг, эмбеддинги `nomic-ai/nomic-embed-text-v2-moe`, FAISS + SQLite, статистика;
+2. RAG-запрос (Task 22): вопрос → retrieval → промт → DeepSeek → ответ; контрольные вопросы;
+3. Реранкинг/фильтрация + query rewrite (Task 23): threshold/similarity/cross_encoder, none/heuristic/llm;
+4. Цитаты и источники (Task 24): структурированный ответ (ОТВЕТ / ИСТОЧНИКИ / ЦИТАТЫ), верификация цитат, режим «не знаю» при слабом контексте.
 
 Интерфейс — только CLI (интерактивный REPL), без web. PDF не поддерживаются.
 
@@ -42,7 +41,7 @@ C:\II\Week 1 Task 21\
 │   ├── llm/                 # LLMProvider, deepseek_provider
 │   ├── retrieval/           # Retriever, VectorRetriever, RetrievedChunk
 │   ├── reranking/           # Reranker, ThresholdFilter, SimilarityReranker, CrossEncoderReranker, RerankerPipeline
-│   ├── rag/                 # RAGPipeline, NoRAGPipeline, prompt_builder, query_rewrite, citations (заглушка)
+│   ├── rag/                 # RAGPipeline, NoRAGPipeline, prompt_builder, query_rewrite, citations (парсинг/верификация)
 │   ├── evaluation/          # вопросы, генерация, прогон, эвристики, отчёты
 │   ├── chat/                # заглушка (задел на День 25)
 │   └── cli/                 # main.py (REPL), commands.py (единый источник описаний)
@@ -116,13 +115,13 @@ python -m src.cli.main
 | `/index show-chunk <name> <chunk_id>` | Полный текст + метаданные чанка |
 | `/index list-chunks <name> [--source ...] [--section ...] [--limit N]` | Список чанков с фильтрами |
 | `/index delete <name>` | Удалить индекс |
-| `/ask "<вопрос>" [--index <name>] [--top-k-retrieve N] [--top-k-after-rerank N] [--reranker threshold\|similarity\|cross_encoder\|none] [--rewrite none\|heuristic\|llm] [--debug]` | RAG-ответ + источники |
+| `/ask "<вопрос>" [--index <name>] [--top-k-retrieve N] [--top-k-after-rerank N] [--reranker threshold\|similarity\|cross_encoder\|none] [--rewrite none\|heuristic\|llm] [--debug]` | RAG-ответ + источники + цитаты (статус ok/unknown) |
 | `/ask-raw "<вопрос>" [--debug]` | Ответ LLM без RAG |
 | `/ask-compare "<вопрос>" [--index <name>] [--top-k-retrieve N]` | Режимы рядом: no_rag \| rag_no_rerank \| rag |
 | `/rerank test "<запрос>" [--index <name>] [--top-k-retrieve N] [--reranker ...]` | Чанки до/после фильтра (без LLM) |
 | `/rewrite test "<запрос>" [--provider none\|heuristic\|llm]` | Переписанный запрос (без retrieval) |
 | `/eval generate [--index <name>] [--count N] [--out <path>] [--force]` | Генерация контрольных вопросов |
-| `/eval run <index_name> [--questions <path>] [--mode <mode>] [--compare-all] [--top-k-retrieve N] [--top-k-after-rerank N]` | Прогон вопросов в режимах |
+| `/eval run <index_name> [--questions <path>] [--mode <mode>] [--compare-all] [--top-k-retrieve N] [--top-k-after-rerank N] [--check-citations on\|off] [--check-sources on\|off] [--check-quote-match on\|off]` | Прогон вопросов в режимах |
 | `/eval report <result_file> [--format console\|markdown\|json]` | Сравнительный отчёт по режимам |
 | `/debug on\|off` | Отладочный режим (показывает эмбеддинги и стектрейсы) |
 | `/exit` | Выход |
@@ -358,10 +357,75 @@ LLM получает выборку чанков (разные source/section) �
 
 Режимы: `no_rag`, `rag_no_rerank`, `rag`, `rag_no_rewrite`, `rag_full`.
 
-## Задел на Дни 24–25
+## Цитаты и источники (Task 24)
 
-- `src/rag/citations.py` — `extract_citations(answer, chunks)` (День 24);
-- `src/chat` — мини-чат с историей и памятью (День 25).
+Схема пайплайна:
 
-Модули — заглушки с интерфейсами, которые заполняются логикой на следующих этапах.
+```
+(rewrite) → retrieval → reranker → проверка контекста → (LLM | «не знаю») → парсинг → верификация
+```
+
+### Формат структурированного ответа
+
+LLM обязан вернуть три блока:
+
+```
+ОТВЕТ:
+<текст ответа>
+
+ИСТОЧНИКИ:
+- source=<файл> | chunk_id=<id>
+
+ЦИТАТЫ:
+- "<дословный фрагмент>" | source=<файл> | chunk_id=<id>
+```
+
+Правила (в system-промте): цитаты — только дословные фрагменты из чанков, не пересказ;
+каждая цитата/источник сопровождается source и chunk_id; если контекста недостаточно — ответ
+начинается с «Не знаю.»; додумывать нельзя.
+
+### Верификация (анти-галлюцинации)
+
+`src/rag/citations.py` разбирает ответ и проверяет:
+
+- **цитаты** — найдена ли цитата в чанках (по chunk_id или по подстроке); если нет — `unverified`;
+- **источники** — есть ли source/chunk_id среди использованных чанков; если нет — `unverified`.
+
+Если структура не распознана (нет блока ОТВЕТ) — `parse_failed=True`, весь ответ считается текстом.
+
+### Режим «не знаю» при слабом контексте
+
+Пороги в `config.yaml`:
+
+```yaml
+rag:
+  unknown_threshold:
+    min_chunks: 1     # после reranker
+    min_score: 0.35   # лучший score после reranker
+```
+
+Если после reranker 0 чанков ИЛИ лучший score ниже порога — LLM **не вызывается**,
+возвращается ответ «Не знаю…» и `answer_status = "unknown"` (экономия токенов и защита от галлюцинаций).
+Порог подбирается через `/rerank test`.
+
+### Чтение отчёта
+
+```bash
+> /eval run my_index --top-k-retrieve 10 --top-k-after-rerank 5
+> /eval report data/eval/results/<timestamp>.json
+```
+
+В отчёте по каждому rag-режиму: доля ответов с блоком ИСТОЧНИКИ, с блоком ЦИТАТЫ, доля
+полностью подтверждённых цитат/источников, доля «unknown», среднее число цитат/источников.
+
+### Если цитаты unverified
+
+Возможные причины: галлюцинация LLM (цитата не из контекста), плохой парсинг (LLM нарушил формат),
+слабый промт. Проверьте сырой ответ через `/ask ... --debug`.
+
+## Задел на День 25
+
+- `src/chat` — мини-чат с историей и памятью.
+
+Модуль `src/chat` — заглушка с интерфейсом, которая заполнится логикой на следующем этапе.
 

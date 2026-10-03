@@ -85,6 +85,14 @@ def evaluate_mode(rag_result, question) -> Dict[str, Any]:
         ],
         "num_chunks_before": len(rag_result.chunks_before_rerank),
         "num_chunks_after": len(rag_result.chunks_after_rerank),
+        # Task 24: источники и цитаты.
+        "answer_status": rag_result.answer_status,
+        "has_sources": bool(rag_result.sources),
+        "has_citations": bool(rag_result.citations),
+        "citations_verified": rag_result.citations_verified,
+        "sources_verified": rag_result.sources_verified,
+        "num_citations": len(rag_result.citations),
+        "num_sources": len(rag_result.sources),
     }
 
 
@@ -100,6 +108,11 @@ def aggregate_modes(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         hits = sum(1 for r in rows if r["modes"][mode]["hit"])
         src_hit = sum(1 for r in rows if r["modes"][mode]["sources"]["hit"] is True)
         src_applicable = sum(1 for r in rows if r["modes"][mode]["sources"]["hit"] is not None)
+        has_sources = sum(1 for r in rows if r["modes"][mode]["has_sources"])
+        has_citations = sum(1 for r in rows if r["modes"][mode]["has_citations"])
+        cit_verified = sum(1 for r in rows if r["modes"][mode]["citations_verified"])
+        src_verified = sum(1 for r in rows if r["modes"][mode]["sources_verified"])
+        unknown = sum(1 for r in rows if r["modes"][mode]["answer_status"] == "unknown")
         per_mode[mode] = {
             "hit_rate": round(hits / n, 4),
             "source_hit_rate": round(src_hit / src_applicable, 4) if src_applicable else 0.0,
@@ -107,5 +120,12 @@ def aggregate_modes(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             "avg_tokens_in": round(sum(r["modes"][mode]["tokens_in"] for r in rows) / n, 1),
             "avg_chunks_before": round(sum(r["modes"][mode]["num_chunks_before"] for r in rows) / n, 2),
             "avg_chunks_after": round(sum(r["modes"][mode]["num_chunks_after"] for r in rows) / n, 2),
+            "sources_present_rate": round(has_sources / n, 4),
+            "citations_present_rate": round(has_citations / n, 4),
+            "citations_verified_rate": round(cit_verified / n, 4),
+            "sources_verified_rate": round(src_verified / n, 4),
+            "unknown_rate": round(unknown / n, 4),
+            "avg_citations": round(sum(r["modes"][mode]["num_citations"] for r in rows) / n, 2),
+            "avg_sources": round(sum(r["modes"][mode]["num_sources"] for r in rows) / n, 2),
         }
     return {"num_questions": n, "per_mode": per_mode}

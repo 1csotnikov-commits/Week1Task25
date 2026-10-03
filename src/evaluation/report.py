@@ -50,6 +50,16 @@ def _render_console(payload: Dict[str, Any]) -> str:
             f"{m.get('avg_time_ms', 0):>8.0f}ms {m.get('avg_tokens_in', 0):>9.1f} {chunks:>14}"
         )
     lines.append("")
+    lines.append("--- Источники и цитаты ---")
+    lines.append(f"{'Режим':<16} {'Sources':>8} {'Cit':>8} {'CitVerif':>9} {'SrcVerif':>9} {'Unknown':>9} {'AvgCit':>7} {'AvgSrc':>7}")
+    for mode in modes:
+        m = per.get(mode, {})
+        lines.append(
+            f"{mode:<16} {m.get('sources_present_rate', 0):>8.2%} {m.get('citations_present_rate', 0):>8.2%} "
+            f"{m.get('citations_verified_rate', 0):>9.2%} {m.get('sources_verified_rate', 0):>9.2%} "
+            f"{m.get('unknown_rate', 0):>9.2%} {m.get('avg_citations', 0):>7.1f} {m.get('avg_sources', 0):>7.1f}"
+        )
+    lines.append("")
     lines.append("--- Вопросы ---")
     for row in payload.get("questions", []):
         lines.append(f"[{row['id']}] {row['question']}")
@@ -89,6 +99,17 @@ def _render_markdown(payload: Dict[str, Any]) -> str:
         lines.append(
             f"| {mode} | {m.get('hit_rate', 0):.2%} | {src_s} | "
             f"{m.get('avg_time_ms', 0):.0f}ms | {m.get('avg_tokens_in', 0):.1f} | {chunks} |"
+        )
+    lines.append("")
+    lines.append("## Источники и цитаты")
+    lines.append("| Режим | Sources | Citations | CitVerified | SrcVerified | Unknown | AvgCit | AvgSrc |")
+    lines.append("| --- | --- | --- | --- | --- | --- | --- | --- |")
+    for mode in modes:
+        m = per.get(mode, {})
+        lines.append(
+            f"| {mode} | {m.get('sources_present_rate', 0):.2%} | {m.get('citations_present_rate', 0):.2%} | "
+            f"{m.get('citations_verified_rate', 0):.2%} | {m.get('sources_verified_rate', 0):.2%} | "
+            f"{m.get('unknown_rate', 0):.2%} | {m.get('avg_citations', 0):.1f} | {m.get('avg_sources', 0):.1f} |"
         )
     lines.append("")
     for row in payload.get("questions", []):

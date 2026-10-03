@@ -1,4 +1,4 @@
-"""RAG-пайплайн: (rewrite) -> retrieval -> (rerank) -> prompt -> LLM -> ответ."""
+"""RAG-пайплайн: (rewrite) -> retrieval -> (rerank) -> проверка контекста -> LLM -> парсинг/верификация."""
 
 from __future__ import annotations
 
@@ -6,12 +6,18 @@ from typing import Optional
 
 from src.config import Config
 from src.llm.base import LLMProvider
+from src.rag.citations import ParsedAnswer, extract_citations, extract_sources, parse_structured_answer
 from src.rag.models import RAGResult
 from src.rag.prompt_builder import build_messages, render_messages
 from src.rag.query_rewrite import QueryRewriter
 from src.reranking.base import Reranker
 from src.reranking.pipeline import RerankerPipeline
 from src.retrieval.base import Retriever
+
+UNKNOWN_ANSWER = (
+    "Не знаю. В предоставленных документах не найдено достаточно информации для ответа. "
+    "Уточните, пожалуйста, вопрос или добавьте документы по теме."
+)
 
 
 class RAGPipeline:
@@ -74,12 +80,22 @@ class RAGPipeline:
                 "threshold": None,
             }
 
+        # Task 24: режим «не знаю» при слабом контексте.
+        if self._is_weak_context(chunks_after):
+            return self._unknown_result(question, chunks_after, original_query, rewritten_query, chunks_before, rewrite_meta, rerank_meta, k_retrieve, k_after)
+
         messages = build_messages(original_query, chunks_after)
         prompt_text = render_messages(messages)
         response = self.llm.complete(messages)
 
+        parsed = parse_structured_answer(response.text)
+        citations = extract_citations(response.text, chunks_after)
+        sources = extract_sources(response.text, chunks_after)
+        citations_verified = all(c.verified for c in citations) if citations else True
+        sources_verified = all(s.verified for s in sources) if sources else True
+
         return RAGResult(
-            answer=response.text,
+            answer=parsed.answer_text,
             mode="rag",
             used_chunks=chunks_after,
             prompt=prompt_text,
@@ -89,6 +105,12 @@ class RAGPipeline:
             chunks_after_rerank=chunks_after,
             rewrite_meta=rewrite_meta,
             rerank_meta=rerank_meta,
+            answer_status="ok",
+            parsed_answer=parsed,
+            citations=citations,
+            sources=sources,
+            citations_verified=citations_verified,
+            sources_verified=sources_verified,
             meta={
                 "model": response.model,
                 "tokens_in": response.prompt_tokens,
@@ -97,6 +119,50 @@ class RAGPipeline:
                 "top_k_retrieve": k_retrieve,
                 "top_k_after_rerank": k_after,
                 "num_chunks": len(chunks_after),
+                "num_citations": len(citations),
+                "num_sources": len(sources),
+                "parse_failed": parsed.parse_failed,
+            },
+        )
+
+    def _is_weak_context(self, chunks_after) -> bool:
+        min_chunks = int(self._cfg("rag.unknown_threshold.min_chunks", 1))
+        min_score = float(self._cfg("rag.unknown_threshold.min_score", 0.35))
+        if len(chunks_after) < min_chunks:
+            return True
+        best_score = max((c.score for c in chunks_after), default=0.0)
+        return best_score < min_score
+
+    def _unknown_result(self, question, chunks_after, original_query, rewritten_query, chunks_before, rewrite_meta, rerank_meta, k_retrieve, k_after) -> RAGResult:
+        parsed = ParsedAnswer(answer_text=UNKNOWN_ANSWER, raw=UNKNOWN_ANSWER, parse_failed=False)
+        return RAGResult(
+            answer=UNKNOWN_ANSWER,
+            mode="rag",
+            used_chunks=[],
+            prompt="",
+            original_query=original_query,
+            rewritten_query=rewritten_query if rewritten_query != original_query else None,
+            chunks_before_rerank=chunks_before,
+            chunks_after_rerank=chunks_after,
+            rewrite_meta=rewrite_meta,
+            rerank_meta=rerank_meta,
+            answer_status="unknown",
+            parsed_answer=parsed,
+            citations=[],
+            sources=[],
+            citations_verified=True,
+            sources_verified=True,
+            meta={
+                "model": "",
+                "tokens_in": 0,
+                "tokens_out": 0,
+                "elapsed_ms": 0,
+                "top_k_retrieve": k_retrieve,
+                "top_k_after_rerank": k_after,
+                "num_chunks": len(chunks_after),
+                "num_citations": 0,
+                "num_sources": 0,
+                "parse_failed": False,
             },
         )
 

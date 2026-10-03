@@ -64,6 +64,40 @@ class TestRAGPipeline(unittest.TestCase):
         self.assertIn("Какой вопрос?", result.prompt)
         self.assertNotIn("Контекст:", result.prompt)
 
+    def test_unknown_when_no_chunks(self):
+        from src.rag.pipeline import RAGPipeline as RP
+
+        class EmptyRetriever:
+            def search(self, query, top_k):
+                return []
+
+        llm = FakeLLM(answer="не должен вызываться")
+        pipeline = RP(EmptyRetriever(), llm)
+        result = pipeline.run("вопрос", use_reranker=False)
+        self.assertEqual(result.answer_status, "unknown")
+        self.assertIn("Не знаю", result.answer)
+        self.assertEqual(result.used_chunks, [])
+        self.assertEqual(len(llm.messages_history), 0)
+
+    def test_unknown_when_low_score(self):
+        from src.config import Config
+        from src.models import Chunk
+        from src.retrieval.models import RetrievedChunk
+
+        class LowRetriever:
+            def search(self, query, top_k):
+                return [RetrievedChunk(Chunk("c0", "a.txt", "t", "текст", 0, 4, "fixed", ""), 0.1, 1)]
+
+        llm = FakeLLM(answer="не должен вызываться")
+        pipeline = RAGPipeline(
+            LowRetriever(),
+            llm,
+            config=Config({"rag": {"unknown_threshold": {"min_score": 0.5, "min_chunks": 1}}}),
+        )
+        result = pipeline.run("вопрос", use_reranker=False)
+        self.assertEqual(result.answer_status, "unknown")
+        self.assertEqual(len(llm.messages_history), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

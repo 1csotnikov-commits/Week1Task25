@@ -57,8 +57,10 @@ class TestCLIRag(unittest.TestCase):
 
     def test_ask(self):
         _, out = handle_command('/ask "Какой вопрос?" --index idx', self.app)
-        self.assertIn("--- Ответ (RAG) ---", out)
+        self.assertIn("Статус:", out)
+        self.assertIn("--- Ответ ---", out)
         self.assertIn("--- Источники ---", out)
+        self.assertIn("--- Цитаты ---", out)
         self.assertIn("Ответ", out)
 
     def test_ask_raw(self):

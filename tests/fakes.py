@@ -24,11 +24,18 @@ class FakeEmbedder(EmbeddingProvider):
         self.dim = dim
         self.calls = []
 
+    @staticmethod
+    def _stable_hash(text: str) -> int:
+        h = 0
+        for ch in text:
+            h = (h * 31 + ord(ch)) % 1000000007
+        return h
+
     def encode(self, texts, batch_size=None):
         self.calls.extend(list(texts))
         arr = np.zeros((len(texts), self.dim), dtype=np.float32)
         for i, t in enumerate(texts):
-            arr[i, abs(hash(t)) % self.dim] = 1.0
+            arr[i, self._stable_hash(t) % self.dim] = 1.0
         norm = np.linalg.norm(arr, axis=1, keepdims=True)
         norm[norm == 0] = 1.0
         return arr / norm

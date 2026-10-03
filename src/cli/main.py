@@ -326,6 +326,17 @@ def _resolve_rewriter(app: App, flags: dict, llm):
     return None
 
 
+def _parse_on_off(flags: dict, key: str, default: bool = True) -> bool:
+    if key not in flags:
+        return default
+    v = str(flags[key]).lower()
+    if v in ("on", "true", "1", "yes"):
+        return True
+    if v in ("off", "false", "0", "no"):
+        return False
+    raise ValueError(f"Флаг --{key}: on|off, получено {flags[key]!r}")
+
+
 def _render_questions_short(questions) -> str:
     lines = []
     for q in questions:
@@ -357,12 +368,32 @@ def _cmd_ask(app: App, args: List[str]) -> str:
         use_rewrite=rewriter is not None,
     )
 
-    lines = ["--- Ответ (RAG) ---", result.answer, "", "--- Источники ---"]
-    if not result.used_chunks:
-        lines.append("  (чанки не найдены)")
-    for c in result.used_chunks:
-        lines.append(f"  [{c.rank}] {c.source} | {c.section or '-'} | {c.chunk_id} | score={c.score:.4f}")
+    lines = [f"Статус: {result.answer_status}", ""]
+    lines.append("--- Ответ ---")
+    lines.append(result.answer)
+
+    lines.append("")
+    lines.append("--- Источники ---")
+    if result.sources:
+        for s in result.sources:
+            mark = "verified" if s.verified else "unverified"
+            lines.append(f"  [{mark}] {s.source} | chunk_id={s.chunk_id}")
+    else:
+        lines.append("  (нет)")
+
+    lines.append("")
+    lines.append("--- Цитаты ---")
+    if result.citations:
+        for c in result.citations:
+            mark = "verified" if c.verified else "unverified"
+            lines.append(f"  [{mark}] \"{c.text}\" | {c.source} | chunk_id={c.chunk_id}")
+    else:
+        lines.append("  (нет)")
+
     if debug:
+        lines.append("")
+        lines.append("--- Полный структурированный ответ LLM ---")
+        lines.append(result.parsed_answer.raw if result.parsed_answer else "")
         lines.append("")
         lines.append(f"--- Rewrite: {result.rewrite_meta.get('method', 'none')} ---")
         if result.rewritten_query:
@@ -574,10 +605,15 @@ def _cmd_eval_run(app: App, index_name: str, flags: dict) -> str:
     else:
         modes = list(DEFAULT_MODES)
 
+    check_citations = _parse_on_off(flags, "check-citations", True)
+    check_sources = _parse_on_off(flags, "check-sources", True)
+    check_quote_match = _parse_on_off(flags, "check-quote-match", True)
+
     results = run_evaluation(questions, rag, no_rag, modes, app.config, top_k_retrieve=top_k_retrieve, top_k_after_rerank=top_k_after)
     results_dir = app.config.resolve_path(app.config.get("evaluation.results_dir", "data/eval/results"))
     json_path, md_path, payload = save_results(
-        results, results_dir, index_name=index_name, top_k_retrieve=top_k_retrieve, top_k_after_rerank=top_k_after, modes=modes
+        results, results_dir, index_name=index_name, top_k_retrieve=top_k_retrieve, top_k_after_rerank=top_k_after, modes=modes,
+        check_citations=check_citations, check_sources=check_sources, check_quote_match=check_quote_match,
     )
 
     return render_report(payload, "console") + f"\n\nСохранено:\n  {json_path}\n  {md_path}"
