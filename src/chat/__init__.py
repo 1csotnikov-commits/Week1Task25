@@ -1,19 +1,30 @@
-"""Мини-чат с RAG + памятью — задел на День 25.
-
-Заглушка: на Дне 25 сюда добавляются история диалога и «память задачи».
-"""
+"""Мини-чат с RAG + памятью (реализация Дня 25)."""
 
 from __future__ import annotations
 
+from src.chat.chat_pipeline import ChatPipeline
+from src.chat.history import HistoryStore
+from src.chat.models import ChatResult, ChatSessionMeta, Message
+from src.chat.scenarios import load_scenario, list_scenarios, run_scenario, save_scenario_results
+from src.chat.session import ChatSession
+from src.chat.state_updater import HeuristicUpdater, LLMUpdater, StateUpdater, make_state_updater
+from src.chat.task_state import TaskState, TaskStateUpdate
 
-class ChatSession:
-    """Сессия диалога с историей и памятью задачи.
-
-    Заглушка для Дня 25 — реализация будет добавлена позже.
-    """
-
-    def __init__(self, *args, **kwargs):
-        raise NotImplementedError("Мини-чат с памятью реализуется на Дне 25.")
-
-
-__all__ = ["ChatSession"]
+__all__ = [
+    "ChatPipeline",
+    "HistoryStore",
+    "ChatResult",
+    "ChatSessionMeta",
+    "Message",
+    "ChatSession",
+    "TaskState",
+    "TaskStateUpdate",
+    "StateUpdater",
+    "HeuristicUpdater",
+    "LLMUpdater",
+    "make_state_updater",
+    "load_scenario",
+    "list_scenarios",
+    "run_scenario",
+    "save_scenario_results",
+]

@@ -1,15 +1,16 @@
-# Week1Task24 — Цитаты, источники, анти-галлюцинации
+# Week1Task25 — Мини-чат с RAG + памятью (production-like)
 
-Расширение проекта Week1Task21–23: локальный пайплайн индексации + RAG + reranking/rewrite + обязательные источники и цитаты.
+Расширение проекта Week1Task21–24: локальный пайплайн индексации + RAG + reranking/rewrite + цитаты/источники + мини-чат с памятью задачи.
 
-Папка проекта — `C:\II\Week 1 Task 21` (продолжение, публикация в отдельный репозиторий Week1Task24).
+Папка проекта — `C:\II\Week 1 Task 21` (продолжение, публикация в отдельный репозиторий Week1Task25).
 
 Возможности:
 
 1. Индексация документов (Task 21): чанкинг, эмбеддинги `nomic-ai/nomic-embed-text-v2-moe`, FAISS + SQLite, статистика;
 2. RAG-запрос (Task 22): вопрос → retrieval → промт → DeepSeek → ответ; контрольные вопросы;
-3. Реранкинг/фильтрация + query rewrite (Task 23): threshold/similarity/cross_encoder, none/heuristic/llm;
-4. Цитаты и источники (Task 24): структурированный ответ (ОТВЕТ / ИСТОЧНИКИ / ЦИТАТЫ), верификация цитат, режим «не знаю» при слабом контексте.
+3. Реранкинг + query rewrite (Task 23): threshold/similarity/cross_encoder, none/heuristic/llm;
+4. Цитаты и источники (Task 24): структурированный ответ, верификация, режим «не знаю»;
+5. Мини-чат с памятью (Task 25): история диалога, task state (goal/facts/constraints/terms/open_questions), сессии и длинные сценарии.
 
 Интерфейс — только CLI (интерактивный REPL), без web. PDF не поддерживаются.
 
@@ -43,7 +44,7 @@ C:\II\Week 1 Task 21\
 │   ├── reranking/           # Reranker, ThresholdFilter, SimilarityReranker, CrossEncoderReranker, RerankerPipeline
 │   ├── rag/                 # RAGPipeline, NoRAGPipeline, prompt_builder, query_rewrite, citations (парсинг/верификация)
 │   ├── evaluation/          # вопросы, генерация, прогон, эвристики, отчёты
-│   ├── chat/                # заглушка (задел на День 25)
+│   ├── chat/                # ChatPipeline, ChatSession, HistoryStore, task_state, state_updater, scenarios
 │   └── cli/                 # main.py (REPL), commands.py (единый источник описаний)
 ├── tests/                   # unittest-тесты
 ├── requirements.txt
@@ -123,6 +124,11 @@ python -m src.cli.main
 | `/eval generate [--index <name>] [--count N] [--out <path>] [--force]` | Генерация контрольных вопросов |
 | `/eval run <index_name> [--questions <path>] [--mode <mode>] [--compare-all] [--top-k-retrieve N] [--top-k-after-rerank N] [--check-citations on\|off] [--check-sources on\|off] [--check-quote-match on\|off]` | Прогон вопросов в режимах |
 | `/eval report <result_file> [--format console\|markdown\|json]` | Сравнительный отчёт по режимам |
+| `/chat new <name> --index <index> [--state-updater heuristic\|llm]` | Новая сессия чата (интерактивный режим) |
+| `/chat load <name>` | Загрузить сессию чата |
+| `/chat list` / `/chat info <name>` / `/chat delete <name>` | Управление сессиями чата |
+| `/chat scenario run <file> [--check-goal] [--check-sources] [--check-citations]` | Прогон длинного сценария |
+| `/chat scenario list` | Список сценариев |
 | `/debug on\|off` | Отладочный режим (показывает эмбеддинги и стектрейсы) |
 | `/exit` | Выход |
 
@@ -423,9 +429,57 @@ rag:
 Возможные причины: галлюцинация LLM (цитата не из контекста), плохой парсинг (LLM нарушил формат),
 слабый промт. Проверьте сырой ответ через `/ask ... --debug`.
 
-## Задел на День 25
+## Мини-чат с RAG + памятью (Task 25)
 
-- `src/chat` — мини-чат с историей и памятью.
+Схема хода:
 
-Модуль `src/chat` — заглушка с интерфейсом, которая заполнится логикой на следующем этапе.
+```
+user → state update → retrieval/rerank/rewrite → prompt (state + history + context) → LLM → парсинг → history + state → ответ
+```
+
+### Хранение сессий
+
+```
+data/chat/sessions/<session_name>/
+├── meta.json           # ChatSessionMeta
+├── history.jsonl       # история (append-only, по одному Message на строку)
+└── task_state.json     # TaskState (перезаписывается целиком)
+```
+
+Сессии загружаются по имени при перезапуске (`/chat load <name>`).
+
+### Память задачи (task state)
+
+Поля: `goal`, `facts`, `constraints`, `terms` (термин→определение), `open_questions`.
+
+Обновление (`chat.state_updater.provider`):
+
+- **heuristic** (по умолчанию) — по маркерам: «цель —», «запомни:», «важно:», «ограничение:», «требование:», «термин: X = Y»;
+- **llm** — через DeepSeek (JSON-обновление), при ошибке парсинга state не меняется.
+
+Внутри чата: `/state show`, `/state edit`, `/state clear`, `/history show [N]`, `/history clear`, `/exit`, `/help`.
+
+### Длинные сценарии
+
+```bash
+> /chat scenario run scenario_1.yaml --check-goal --check-sources --check-citations
+> /chat scenario list
+```
+
+Сценарии — YAML (`data/chat/scenarios/*.yaml`) с `name`, `description`, `index_name` и `messages`.
+Результаты — `data/chat/scenarios/results/<name>_<timestamp>.json` и `.md`.
+
+### Если ассистент теряет цель
+
+- увеличьте `chat.history_window` (сколько последних сообщений попадает в промт);
+- переключите `state_updater.provider` на `llm` (точнее, но медленнее);
+- посмотрите логи и `/state show`.
+
+## Ограничения
+
+- LLM-провайдер только DeepSeek; модель эмбеддингов только nomic-embed-text-v2-moe;
+- интерфейс — CLI, без web;
+- сравнение качества — эвристики, без LLM-as-judge;
+- task state — компактная выжимка, возможны потери неявных уточнений (особенно в heuristic-режиме);
+- сценарии пишет пользователь вручную.
 

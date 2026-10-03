@@ -14,6 +14,7 @@ REPORT_FORMAT_CHOICES = ("console", "markdown", "json")
 RERANKER_CHOICES = ("threshold", "similarity", "cross_encoder", "none")
 REWRITER_CHOICES = ("none", "heuristic", "llm")
 EVAL_MODE_CHOICES = ("no_rag", "rag_no_rerank", "rag", "rag_no_rewrite", "rag_full")
+STATE_UPDATER_CHOICES = ("heuristic", "llm")
 
 # Структура команд. Используется и для /help, и для валидации в парсере.
 COMMANDS: Dict[str, Dict[str, Any]] = {
@@ -200,6 +201,62 @@ COMMANDS: Dict[str, Dict[str, Any]] = {
                 "example": "/eval report data/eval/results/20260101-120000.json",
                 "arguments": [{"name": "result_file", "required": True, "description": "путь к .json результата"}],
                 "flags": [{"name": "format", "choices": REPORT_FORMAT_CHOICES, "description": "формат вывода"}],
+            },
+        },
+    },
+    "/chat": {
+        "description": "Мини-чат с RAG и памятью задачи",
+        "usage": "/chat <subcommand> [options]",
+        "example": "/chat new my_session --index my_index",
+        "subcommands": {
+            "new": {
+                "description": "Создать новую сессию и войти в интерактивный чат",
+                "usage": "/chat new <session_name> --index <index_name> [--state-updater heuristic|llm]",
+                "example": "/chat new session1 --index my_index --state-updater heuristic",
+                "arguments": [{"name": "session_name", "required": True, "description": "имя сессии"}],
+                "flags": [
+                    {"name": "index", "description": "имя индекса"},
+                    {"name": "state-updater", "choices": STATE_UPDATER_CHOICES, "description": "провайдер обновления task state"},
+                ],
+            },
+            "load": {
+                "description": "Загрузить существующую сессию и войти в чат",
+                "usage": "/chat load <session_name>",
+                "example": "/chat load session1",
+                "arguments": [{"name": "session_name", "required": True, "description": "имя сессии"}],
+            },
+            "list": {
+                "description": "Список сессий с метаданными",
+                "usage": "/chat list",
+                "example": "/chat list",
+            },
+            "info": {
+                "description": "Метаданные и текущий task state сессии",
+                "usage": "/chat info <session_name>",
+                "example": "/chat info session1",
+                "arguments": [{"name": "session_name", "required": True, "description": "имя сессии"}],
+            },
+            "delete": {
+                "description": "Удалить сессию",
+                "usage": "/chat delete <session_name>",
+                "example": "/chat delete session1",
+                "arguments": [{"name": "session_name", "required": True, "description": "имя сессии"}],
+            },
+            "scenario run": {
+                "description": "Прогнать длинный сценарий",
+                "usage": "/chat scenario run <scenario_file> [--check-goal] [--check-sources] [--check-citations]",
+                "example": "/chat scenario run scenario_1.yaml --check-goal --check-sources",
+                "arguments": [{"name": "scenario_file", "required": True, "description": "имя файла сценария или путь"}],
+                "flags": [
+                    {"name": "check-goal", "description": "проверить, что цель диалога зафиксирована"},
+                    {"name": "check-sources", "description": "проверить наличие источников в ответах"},
+                    {"name": "check-citations", "description": "проверить наличие цитат в ответах"},
+                ],
+            },
+            "scenario list": {
+                "description": "Список доступных сценариев",
+                "usage": "/chat scenario list",
+                "example": "/chat scenario list",
             },
         },
     },

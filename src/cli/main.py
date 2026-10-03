@@ -19,6 +19,11 @@ from src.cli.commands import (
     build_help,
     list_index_subcommands,
 )
+from src.chat import ChatPipeline, ChatSession, HistoryStore, make_state_updater
+from src.chat.chat_pipeline import render_state
+from src.chat.commands import build_chat_help, parse_chat_command
+from src.chat.scenarios import list_scenarios, load_scenario, run_scenario, save_scenario_results
+from src.chat.task_state import TaskState
 from src.config import Config
 from src.embeddings.nomic_provider import NomicProvider
 from src.evaluation.generator import generate_questions
@@ -627,6 +632,193 @@ def _cmd_eval_report(app: App, result_file: str, flags: dict) -> str:
 
 
 # ---------------------------------------------------------------------- #
+# Команды /chat
+# ---------------------------------------------------------------------- #
+def _build_chat_pipeline(app: App, index_name: str, flags: dict) -> ChatPipeline:
+    llm = _make_llm(app.config)
+    reranker = _resolve_reranker(app, flags)
+    rewriter = _resolve_rewriter(app, flags, llm)
+    rag = RAGPipeline(_make_retriever(app, index_name), llm, app.config, reranker=reranker, rewriter=rewriter)
+    updater = make_state_updater(
+        flags.get("state-updater") or app.config.get("chat.state_updater.provider", "heuristic"),
+        app.config,
+        llm,
+    )
+    return ChatPipeline(rag, updater, app.config)
+
+
+def _chat_sessions_store(app: App) -> HistoryStore:
+    return HistoryStore(app.config.resolve_path("data/chat/sessions"))
+
+
+def _print_chat_result(result, debug: bool) -> None:
+    rag = result.rag_result
+    print(f"[{rag.answer_status}] {rag.answer}")
+    if rag.sources:
+        print("  Источники:")
+        for s in rag.sources:
+            mark = "verified" if s.verified else "unverified"
+            print(f"    [{mark}] {s.source} | chunk_id={s.chunk_id}")
+    if rag.citations:
+        print("  Цитаты:")
+        for c in rag.citations:
+            mark = "verified" if c.verified else "unverified"
+            print(f"    [{mark}] \"{c.text}\" | {c.source} | chunk_id={c.chunk_id}")
+    if result.state_updates:
+        print(f"  (state: {', '.join(result.state_updates)})")
+
+
+def _run_chat_repl(app: App, session: ChatSession, pipeline: ChatPipeline) -> None:
+    print(f"Чат '{session.name}' (индекс: {session.index_name}). /help — команды, /exit — выход.")
+    while True:
+        try:
+            raw = input("chat> ")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        line = raw.strip()
+        if not line:
+            continue
+        parsed = parse_chat_command(line)
+        if parsed is None:
+            result = pipeline.send(session, line)
+            _print_chat_result(result, app.debug)
+            continue
+        name, args = parsed
+        if name == "exit":
+            break
+        if name == "help":
+            print(build_chat_help())
+        elif name == "state_show":
+            print(render_state(session.task_state))
+        elif name == "state_edit":
+            print(f"task_state.json: {session.store.session_dir(session.name) / 'task_state.json'}")
+        elif name == "state_clear":
+            session.task_state = TaskState()
+            session.save()
+            print("Task state очищен.")
+        elif name == "history_show":
+            n = int(args[0]) if args else 10
+            for m in session.recent_messages(n):
+                print(f"[{m.role}] {m.content}")
+        elif name == "history_clear":
+            session.clear_history()
+            print("История очищена.")
+        elif name == "unknown":
+            print(f"Неизвестная команда чата: {args[0]}. /help для списка.")
+    session.save()
+
+
+def _cmd_chat(app: App, args: List[str]) -> str:
+    if not args:
+        return build_help("/chat")
+    sub = args[0]
+    rest = args[1:]
+    if sub == "new":
+        _require_positional(rest, 1, "/chat new <session_name> --index <index_name>")
+        pos, flags = parse_args(rest)
+        return _cmd_chat_new(app, pos[0], flags)
+    if sub == "load":
+        _require_positional(rest, 1, "/chat load <session_name>")
+        return _cmd_chat_load(app, rest[0])
+    if sub == "list":
+        return _cmd_chat_list(app)
+    if sub == "info":
+        _require_positional(rest, 1, "/chat info <session_name>")
+        return _cmd_chat_info(app, rest[0])
+    if sub == "delete":
+        _require_positional(rest, 1, "/chat delete <session_name>")
+        return _cmd_chat_delete(app, rest[0])
+    if sub == "scenario":
+        if not rest:
+            return build_help("/chat scenario run")
+        if rest[0] == "run":
+            _require_positional(rest, 2, "/chat scenario run <scenario_file> [--check-goal] [--check-sources] [--check-citations]")
+            pos, flags = parse_args(rest[1:])
+            return _cmd_chat_scenario_run(app, pos[0], flags)
+        if rest[0] == "list":
+            return _cmd_chat_scenario_list(app)
+        raise ValueError(f"Неизвестная подкоманда /chat scenario: {rest[0]!r}. Доступно: run, list")
+    raise ValueError(f"Неизвестная подкоманда /chat: {sub!r}. Доступно: new, load, list, info, delete, scenario run, scenario list")
+
+
+def _cmd_chat_new(app: App, session_name: str, flags: dict) -> str:
+    index_name = flags.get("index") or app.config.get("chat.default_index_name", "")
+    if not index_name:
+        raise ValueError("Не указан индекс. Укажите --index <index_name> или chat.default_index_name в config.yaml.")
+    store = _chat_sessions_store(app)
+    if store.exists(session_name):
+        raise ValueError(f"Сессия '{session_name}' уже существует. Используйте /chat load {session_name}.")
+    session = ChatSession.create(store, session_name, index_name)
+    pipeline = _build_chat_pipeline(app, index_name, flags)
+    _run_chat_repl(app, session, pipeline)
+    return f"Сессия '{session_name}' сохранена."
+
+
+def _cmd_chat_load(app: App, session_name: str) -> str:
+    session = ChatSession.load(_chat_sessions_store(app), session_name)
+    pipeline = _build_chat_pipeline(app, session.index_name, {})
+    _run_chat_repl(app, session, pipeline)
+    return f"Сессия '{session_name}' сохранена."
+
+
+def _cmd_chat_list(app: App) -> str:
+    metas = _chat_sessions_store(app).list_sessions()
+    if not metas:
+        return "Сессий нет."
+    lines = ["Сессии:"]
+    for m in metas:
+        lines.append(f"  {m.name:<20} index={m.index_name:<22} msgs={m.message_count} updated={m.updated_at}")
+    return "\n".join(lines)
+
+
+def _cmd_chat_info(app: App, session_name: str) -> str:
+    session = ChatSession.load(_chat_sessions_store(app), session_name)
+    lines = [f"Сессия: {session.name}", f"  index: {session.index_name}", f"  сообщений: {len(session.history)}", "", "Task state:"]
+    lines.append(render_state(session.task_state))
+    return "\n".join(lines)
+
+
+def _cmd_chat_delete(app: App, session_name: str) -> str:
+    _chat_sessions_store(app).delete_session(session_name)
+    return f"Сессия '{session_name}' удалена."
+
+
+def _cmd_chat_scenario_run(app: App, scenario_file: str, flags: dict) -> str:
+    scenarios_dir = app.config.resolve_path(app.config.get("chat.scenarios.path", "data/chat/scenarios"))
+    path = Path(scenario_file)
+    if not path.is_absolute() and (scenarios_dir / scenario_file).exists():
+        path = scenarios_dir / scenario_file
+    scenario = load_scenario(path)
+    index_name = scenario.index_name or flags.get("index") or app.config.get("chat.default_index_name", "")
+    if not index_name:
+        raise ValueError("Сценарий не содержит index_name и не указан --index.")
+
+    store = _chat_sessions_store(app)
+    session_name = f"{scenario.name}_{datetime.now():%Y%m%d-%H%M%S}"
+    session = ChatSession.create(store, session_name, index_name)
+    pipeline = _build_chat_pipeline(app, index_name, flags)
+
+    checks = {
+        "check_goal": bool(flags.get("check-goal")),
+        "check_sources": bool(flags.get("check-sources")),
+        "check_citations": bool(flags.get("check-citations")),
+    }
+    report = run_scenario(pipeline, scenario, session, checks)
+    results_dir = app.config.resolve_path(app.config.get("chat.scenarios.results_path", "data/chat/scenarios/results"))
+    json_path, md_path = save_scenario_results(report, results_dir)
+    return f"Сценарий '{scenario.name}' пройден ({len(report['turns'])} ходов).\n  {json_path}\n  {md_path}"
+
+
+def _cmd_chat_scenario_list(app: App) -> str:
+    scenarios_dir = app.config.resolve_path(app.config.get("chat.scenarios.path", "data/chat/scenarios"))
+    files = list_scenarios(scenarios_dir)
+    if not files:
+        return "Сценариев нет."
+    return "Сценарии:\n  " + "\n  ".join(files)
+
+
+# ---------------------------------------------------------------------- #
 # Диспетчер и точка входа
 # ---------------------------------------------------------------------- #
 def handle_command(line: str, app: App) -> Tuple[bool, str]:
@@ -658,6 +850,8 @@ def handle_command(line: str, app: App) -> Tuple[bool, str]:
         return False, _cmd_rewrite(app, args)
     if cmd == "/eval":
         return False, _cmd_eval(app, args)
+    if cmd == "/chat":
+        return False, _cmd_chat(app, args)
 
     return False, f"Неизвестная команда: {cmd!r}. Введите /help для списка команд."
 

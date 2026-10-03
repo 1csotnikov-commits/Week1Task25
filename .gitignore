@@ -19,6 +19,12 @@ data/eval/results/*
 data/logs/*
 !data/logs/.gitkeep
 
+# Сессии чата и результаты сценариев
+data/chat/sessions/*
+!data/chat/sessions/.gitkeep
+data/chat/scenarios/results/*
+!data/chat/scenarios/results/.gitkeep
+
 # Отчёты
 *.report.json
 *.report.csv

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
 
 from src.config import Config
 from src.llm.base import LLMProvider
@@ -13,6 +14,7 @@ from src.rag.query_rewrite import QueryRewriter
 from src.reranking.base import Reranker
 from src.reranking.pipeline import RerankerPipeline
 from src.retrieval.base import Retriever
+from src.retrieval.models import RetrievedChunk
 
 UNKNOWN_ANSWER = (
     "Не знаю. В предоставленных документах не найдено достаточно информации для ответа. "
@@ -20,8 +22,23 @@ UNKNOWN_ANSWER = (
 )
 
 
+@dataclass
+class RetrievalContext:
+    """Промежуточный результат retrieval/rerank/проверки контекста."""
+
+    original_query: str
+    rewritten_query: str
+    chunks_before: List[RetrievedChunk] = field(default_factory=list)
+    chunks_after: List[RetrievedChunk] = field(default_factory=list)
+    rewrite_meta: Dict[str, Any] = field(default_factory=dict)
+    rerank_meta: Dict[str, Any] = field(default_factory=dict)
+    k_retrieve: int = 10
+    k_after: int = 5
+    is_weak: bool = False
+
+
 class RAGPipeline:
-    """RAG с опциональным query rewrite и reranking."""
+    """RAG с query rewrite, reranking и анти-галлюцинациями."""
 
     def __init__(
         self,
@@ -43,14 +60,15 @@ class RAGPipeline:
             return self.config.get(dotted, default)
         return default
 
-    def run(
+    def retrieve(
         self,
         question: str,
         top_k_retrieve: Optional[int] = None,
         top_k_after_rerank: Optional[int] = None,
         use_reranker: bool = True,
         use_rewrite: bool = False,
-    ) -> RAGResult:
+    ) -> RetrievalContext:
+        """Выполнить (rewrite) -> retrieval -> (rerank) и проверить слабый контекст."""
         k_retrieve = int(top_k_retrieve) if top_k_retrieve is not None else int(self._cfg("retrieval.top_k_retrieve", 10))
         k_after = int(top_k_after_rerank) if top_k_after_rerank is not None else int(self._cfg("reranking.top_k_after_rerank", 5))
 
@@ -80,11 +98,32 @@ class RAGPipeline:
                 "threshold": None,
             }
 
-        # Task 24: режим «не знаю» при слабом контексте.
-        if self._is_weak_context(chunks_after):
-            return self._unknown_result(question, chunks_after, original_query, rewritten_query, chunks_before, rewrite_meta, rerank_meta, k_retrieve, k_after)
+        return RetrievalContext(
+            original_query=original_query,
+            rewritten_query=rewritten_query,
+            chunks_before=chunks_before,
+            chunks_after=chunks_after,
+            rewrite_meta=rewrite_meta,
+            rerank_meta=rerank_meta,
+            k_retrieve=k_retrieve,
+            k_after=k_after,
+            is_weak=self._is_weak_context(chunks_after),
+        )
 
-        messages = build_messages(original_query, chunks_after)
+    def run(
+        self,
+        question: str,
+        top_k_retrieve: Optional[int] = None,
+        top_k_after_rerank: Optional[int] = None,
+        use_reranker: bool = True,
+        use_rewrite: bool = False,
+    ) -> RAGResult:
+        ctx = self.retrieve(question, top_k_retrieve, top_k_after_rerank, use_reranker, use_rewrite)
+        if ctx.is_weak:
+            return self._unknown_result(ctx)
+
+        chunks_after = ctx.chunks_after
+        messages = build_messages(ctx.original_query, chunks_after)
         prompt_text = render_messages(messages)
         response = self.llm.complete(messages)
 
@@ -99,12 +138,12 @@ class RAGPipeline:
             mode="rag",
             used_chunks=chunks_after,
             prompt=prompt_text,
-            original_query=original_query,
-            rewritten_query=rewritten_query if rewritten_query != original_query else None,
-            chunks_before_rerank=chunks_before,
+            original_query=ctx.original_query,
+            rewritten_query=ctx.rewritten_query if ctx.rewritten_query != ctx.original_query else None,
+            chunks_before_rerank=ctx.chunks_before,
             chunks_after_rerank=chunks_after,
-            rewrite_meta=rewrite_meta,
-            rerank_meta=rerank_meta,
+            rewrite_meta=ctx.rewrite_meta,
+            rerank_meta=ctx.rerank_meta,
             answer_status="ok",
             parsed_answer=parsed,
             citations=citations,
@@ -116,8 +155,8 @@ class RAGPipeline:
                 "tokens_in": response.prompt_tokens,
                 "tokens_out": response.completion_tokens,
                 "elapsed_ms": response.elapsed_ms,
-                "top_k_retrieve": k_retrieve,
-                "top_k_after_rerank": k_after,
+                "top_k_retrieve": ctx.k_retrieve,
+                "top_k_after_rerank": ctx.k_after,
                 "num_chunks": len(chunks_after),
                 "num_citations": len(citations),
                 "num_sources": len(sources),
@@ -133,19 +172,19 @@ class RAGPipeline:
         best_score = max((c.score for c in chunks_after), default=0.0)
         return best_score < min_score
 
-    def _unknown_result(self, question, chunks_after, original_query, rewritten_query, chunks_before, rewrite_meta, rerank_meta, k_retrieve, k_after) -> RAGResult:
+    def _unknown_result(self, ctx: RetrievalContext) -> RAGResult:
         parsed = ParsedAnswer(answer_text=UNKNOWN_ANSWER, raw=UNKNOWN_ANSWER, parse_failed=False)
         return RAGResult(
             answer=UNKNOWN_ANSWER,
             mode="rag",
             used_chunks=[],
             prompt="",
-            original_query=original_query,
-            rewritten_query=rewritten_query if rewritten_query != original_query else None,
-            chunks_before_rerank=chunks_before,
-            chunks_after_rerank=chunks_after,
-            rewrite_meta=rewrite_meta,
-            rerank_meta=rerank_meta,
+            original_query=ctx.original_query,
+            rewritten_query=ctx.rewritten_query if ctx.rewritten_query != ctx.original_query else None,
+            chunks_before_rerank=ctx.chunks_before,
+            chunks_after_rerank=ctx.chunks_after,
+            rewrite_meta=ctx.rewrite_meta,
+            rerank_meta=ctx.rerank_meta,
             answer_status="unknown",
             parsed_answer=parsed,
             citations=[],
@@ -157,9 +196,9 @@ class RAGPipeline:
                 "tokens_in": 0,
                 "tokens_out": 0,
                 "elapsed_ms": 0,
-                "top_k_retrieve": k_retrieve,
-                "top_k_after_rerank": k_after,
-                "num_chunks": len(chunks_after),
+                "top_k_retrieve": ctx.k_retrieve,
+                "top_k_after_rerank": ctx.k_after,
+                "num_chunks": len(ctx.chunks_after),
                 "num_citations": 0,
                 "num_sources": 0,
                 "parse_failed": False,
